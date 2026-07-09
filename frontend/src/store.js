@@ -14,6 +14,10 @@ function nextPosition(cards, columnId) {
   return Math.max(...inColumn.map((c) => c.position)) + 1;
 }
 
+// Temp IDs deleted by the user before their create-ack came back.
+// Doesn't need to be reactive state — it's just a guard checked inside callbacks.
+const cancelledTempIds = new Set();
+
 export const useBoardStore = create((set, get) => ({
   cards: {}, // id -> card
   lastSeq: 0,
@@ -87,6 +91,19 @@ export const useBoardStore = create((set, get) => ({
 
     socket.emit('card:create', { tempId, columnId, title, position }, (res) => {
       if (res?.ok) {
+        if (cancelledTempIds.has(tempId)) {
+          // User deleted this card before the server confirmed it existed.
+          // Don't let it reappear — and clean it up server-side since it
+          // does now exist there under its real id.
+          cancelledTempIds.delete(tempId);
+          set((state) => {
+            const cards = { ...state.cards };
+            delete cards[tempId];
+            return { cards };
+          });
+          socket.emit('card:delete', { id: res.card.id });
+          return;
+        }
         set((state) => {
           const cards = { ...state.cards };
           delete cards[tempId];
@@ -116,6 +133,14 @@ export const useBoardStore = create((set, get) => ({
       } else if (res?.reason === 'conflict' && res.card) {
         // Someone else moved it first — snap back to authoritative state
         set((state) => ({ cards: { ...state.cards, [id]: res.card } }));
+      } else if (res?.reason === 'not_found') {
+        // Someone deleted this card while it was being dragged elsewhere —
+        // don't leave a ghost card stuck in local state.
+        set((state) => {
+          const cards = { ...state.cards };
+          delete cards[id];
+          return { cards };
+        });
       }
     });
   },
@@ -131,11 +156,28 @@ export const useBoardStore = create((set, get) => ({
         set((state) => ({ cards: { ...state.cards, [id]: res.card } }));
       } else if (res?.reason === 'conflict' && res.card) {
         set((state) => ({ cards: { ...state.cards, [id]: res.card } }));
+      } else if (res?.reason === 'not_found') {
+        set((state) => {
+          const cards = { ...state.cards };
+          delete cards[id];
+          return { cards };
+        });
       }
     });
   },
 
   deleteCard(id) {
+    if (id.startsWith('temp_')) {
+      // Still-pending optimistic card — server doesn't know about it yet.
+
+      cancelledTempIds.add(id);
+      set((state) => {
+        const cards = { ...state.cards };
+        delete cards[id];
+        return { cards };
+      });
+      return;
+    }
     set((state) => {
       const cards = { ...state.cards };
       delete cards[id];

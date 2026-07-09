@@ -59,6 +59,7 @@ export default function Card({ card, viewers, accent }) {
         <span>v{card.version}</span>
         <button
           onClick={() => deleteCard(card.id)}
+          onPointerDown={(e) => e.stopPropagation()}
           className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-500"
         >
           remove
